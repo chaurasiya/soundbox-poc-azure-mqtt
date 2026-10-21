@@ -1,0 +1,135 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "namespaceName": { "type": "string" },
+    "location": { "type": "string", "defaultValue": "[resourceGroup().location]" },
+    "deviceName": { "type": "string", "defaultValue": "sb-device-001" },
+    "deviceThumbprint": { "type": "string" },
+    "backendName": { "type": "string", "defaultValue": "sb-backend" },
+    "backendThumbprint": { "type": "string" }
+  },
+  "variables": {
+    "api": "2025-02-15"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.EventGrid/namespaces",
+      "apiVersion": "[variables('api')]",
+      "name": "[parameters('namespaceName')]",
+      "location": "[parameters('location')]",
+      "sku": { "name": "Standard", "capacity": 1 },
+      "properties": {
+        "topicSpacesConfiguration": { "state": "Enabled" }
+      }
+    },
+    {
+      "type": "Microsoft.EventGrid/namespaces/clientGroups",
+      "apiVersion": "[variables('api')]",
+      "name": "[format('{0}/soundboxDevices', parameters('namespaceName'))]",
+      "properties": { "query": "attributes.type IN ['soundbox']" },
+      "dependsOn": [ "[resourceId('Microsoft.EventGrid/namespaces', parameters('namespaceName'))]" ]
+    },
+    {
+      "type": "Microsoft.EventGrid/namespaces/clientGroups",
+      "apiVersion": "[variables('api')]",
+      "name": "[format('{0}/backends', parameters('namespaceName'))]",
+      "properties": { "query": "attributes.type IN ['backend']" },
+      "dependsOn": [ "[resourceId('Microsoft.EventGrid/namespaces/clientGroups', parameters('namespaceName'), 'soundboxDevices')]" ]
+    },
+    {
+      "type": "Microsoft.EventGrid/namespaces/clients",
+      "apiVersion": "[variables('api')]",
+      "name": "[format('{0}/{1}', parameters('namespaceName'), parameters('deviceName'))]",
+      "properties": {
+        "authenticationName": "[parameters('deviceName')]",
+        "state": "Enabled",
+        "attributes": { "type": "soundbox" },
+        "clientCertificateAuthentication": {
+          "validationScheme": "ThumbprintMatch",
+          "allowedThumbprints": [ "[parameters('deviceThumbprint')]" ]
+        }
+      },
+      "dependsOn": [ "[resourceId('Microsoft.EventGrid/namespaces/clientGroups', parameters('namespaceName'), 'backends')]" ]
+    },
+    {
+      "type": "Microsoft.EventGrid/namespaces/clients",
+      "apiVersion": "[variables('api')]",
+      "name": "[format('{0}/{1}', parameters('namespaceName'), parameters('backendName'))]",
+      "properties": {
+        "authenticationName": "[parameters('backendName')]",
+        "state": "Enabled",
+        "attributes": { "type": "backend" },
+        "clientCertificateAuthentication": {
+          "validationScheme": "ThumbprintMatch",
+          "allowedThumbprints": [ "[parameters('backendThumbprint')]" ]
+        }
+      },
+      "dependsOn": [ "[resourceId('Microsoft.EventGrid/namespaces/clients', parameters('namespaceName'), parameters('deviceName'))]" ]
+    },
+    {
+      "type": "Microsoft.EventGrid/namespaces/topicSpaces",
+      "apiVersion": "[variables('api')]",
+      "name": "[format('{0}/allPayments', parameters('namespaceName'))]",
+      "properties": { "topicTemplates": [ "soundbox/+/payments" ] },
+      "dependsOn": [ "[resourceId('Microsoft.EventGrid/namespaces/clients', parameters('namespaceName'), parameters('backendName'))]" ]
+    },
+    {
+      "type": "Microsoft.EventGrid/namespaces/topicSpaces",
+      "apiVersion": "[variables('api')]",
+      "name": "[format('{0}/ownPayments', parameters('namespaceName'))]",
+      "properties": { "topicTemplates": [ "soundbox/${client.authenticationName}/payments" ] },
+      "dependsOn": [ "[resourceId('Microsoft.EventGrid/namespaces/topicSpaces', parameters('namespaceName'), 'allPayments')]" ]
+    },
+    {
+      "type": "Microsoft.EventGrid/namespaces/topicSpaces",
+      "apiVersion": "[variables('api')]",
+      "name": "[format('{0}/ownStatus', parameters('namespaceName'))]",
+      "properties": { "topicTemplates": [ "soundbox/${client.authenticationName}/status" ] },
+      "dependsOn": [ "[resourceId('Microsoft.EventGrid/namespaces/topicSpaces', parameters('namespaceName'), 'ownPayments')]" ]
+    },
+    {
+      "type": "Microsoft.EventGrid/namespaces/topicSpaces",
+      "apiVersion": "[variables('api')]",
+      "name": "[format('{0}/allStatus', parameters('namespaceName'))]",
+      "properties": { "topicTemplates": [ "soundbox/+/status" ] },
+      "dependsOn": [ "[resourceId('Microsoft.EventGrid/namespaces/topicSpaces', parameters('namespaceName'), 'ownStatus')]" ]
+    },
+    {
+      "type": "Microsoft.EventGrid/namespaces/permissionBindings",
+      "apiVersion": "[variables('api')]",
+      "name": "[format('{0}/backendPublishPayments', parameters('namespaceName'))]",
+      "properties": { "clientGroupName": "backends", "topicSpaceName": "allPayments", "permission": "Publisher" },
+      "dependsOn": [
+        "[resourceId('Microsoft.EventGrid/namespaces/topicSpaces', parameters('namespaceName'), 'allStatus')]"
+      ]
+    },
+    {
+      "type": "Microsoft.EventGrid/namespaces/permissionBindings",
+      "apiVersion": "[variables('api')]",
+      "name": "[format('{0}/backendSubscribeStatus', parameters('namespaceName'))]",
+      "properties": { "clientGroupName": "backends", "topicSpaceName": "allStatus", "permission": "Subscriber" },
+      "dependsOn": [ "[resourceId('Microsoft.EventGrid/namespaces/permissionBindings', parameters('namespaceName'), 'backendPublishPayments')]" ]
+    },
+    {
+      "type": "Microsoft.EventGrid/namespaces/permissionBindings",
+      "apiVersion": "[variables('api')]",
+      "name": "[format('{0}/deviceSubscribePayments', parameters('namespaceName'))]",
+      "properties": { "clientGroupName": "soundboxDevices", "topicSpaceName": "ownPayments", "permission": "Subscriber" },
+      "dependsOn": [ "[resourceId('Microsoft.EventGrid/namespaces/permissionBindings', parameters('namespaceName'), 'backendSubscribeStatus')]" ]
+    },
+    {
+      "type": "Microsoft.EventGrid/namespaces/permissionBindings",
+      "apiVersion": "[variables('api')]",
+      "name": "[format('{0}/devicePublishStatus', parameters('namespaceName'))]",
+      "properties": { "clientGroupName": "soundboxDevices", "topicSpaceName": "ownStatus", "permission": "Publisher" },
+      "dependsOn": [ "[resourceId('Microsoft.EventGrid/namespaces/permissionBindings', parameters('namespaceName'), 'deviceSubscribePayments')]" ]
+    }
+  ],
+  "outputs": {
+    "mqttHostname": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.EventGrid/namespaces', parameters('namespaceName')), variables('api')).topicSpacesConfiguration.hostname]"
+    }
+  }
+}

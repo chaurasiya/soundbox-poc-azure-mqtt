@@ -1,0 +1,4 @@
+# Tooling for local tests and device onboarding (pip install -r requirements.txt)
+paho-mqtt
+esptool
+esp-idf-nvs-partition-gen
